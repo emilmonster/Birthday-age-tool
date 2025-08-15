@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>我已经活了多少天（农历修正版）</title>
+<style>
+:root{--bg:#0b1020;--card:#111936;--text:#e7ecff;--muted:#a6b0d8;--accent:#6ea8fe;--accent-2:#9ad0ff;--border:#223057}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Noto Sans CJK SC","Microsoft Yahei",Arial;background:radial-gradient(1200px 800px at 20% -10%,#1a2a6c 0%,transparent 50%),radial-gradient(1000px 600px at 100% 10%,#162447 0%,transparent 50%),var(--bg);color:var(--text)}
+.container{max-width:860px;margin:6vh auto;padding:0 16px}
+h1{font-size:clamp(26px,4vw,40px);margin:0 0 14px;line-height:1.2}
+.card{background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,0));border:1px solid var(--border);box-shadow:0 10px 30px rgba(0,0,0,.25);border-radius:20px;padding:18px;backdrop-filter:blur(6px)}
+.field{margin-bottom:14px}
+.inline{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+label{display:block;margin:4px 0 6px;color:var(--muted)}.req{color:var(--accent-2)}
+select,input[type="time"]{background:#0d1430;color:var(--text);border:1px solid var(--border);border-radius:12px;padding:10px 12px;outline:none;min-width:150px}
+.checkbox{display:flex;align-items:center;gap:8px;cursor:pointer}
+.switch{display:flex;gap:16px;margin:6px 0 2px}
+.radio{display:flex;align-items:center;gap:6px;cursor:pointer}
+.help{color:var(--muted);font-size:12px}
+button{appearance:none;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#0b0f1d;font-weight:700;border:none;border-radius:14px;padding:12px 18px;cursor:pointer;margin-top:6px;box-shadow:0 8px 20px rgba(110,168,254,.35)}
+button:active{transform:translateY(1px)}
+.tz{color:var(--muted);font-size:14px;margin:8px 0 0}
+.result,.milestones{margin-top:18px;background:#0c1330b3;border:1px dashed var(--border);border-radius:16px;padding:16px}
+.hidden{display:none}
+.result strong{font-size:clamp(20px,3vw,28px)}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:8px}
+.kpi .item{background:#0b122c;border:1px solid var(--border);border-radius:12px;padding:12px}
+.kpi .val{font-size:22px;font-weight:800}.kpi .label{color:var(--muted);font-size:13px}
+.milestones h3{margin:6px 0 12px}.milestones ul{margin:0;padding-left:18px;line-height:1.8;color:var(--muted)}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#0b122c;border:1px solid var(--border);font-size:12px;color:var(--muted)}
+.note{color:var(--muted);font-size:12px;margin-top:8px}
+.warn{color:#ffd18b}
+</style>
+</head>
+<body>
+<main class="container">
+  <h1>我已经活了多少天 <span class="badge">支持农历 · 闰月修正</span></h1>
+
+  <form id="ageForm" class="card" autocomplete="off">
+    <div class="field">
+      <label>生日类型 <span class="req">*</span></label>
+      <div class="switch">
+        <label class="radio"><input type="radio" name="calType" value="solar" checked> 公历</label>
+        <label class="radio"><input type="radio" name="calType" value="lunar"> 农历</label>
+      </div>
+      <div class="help">农历支持 1900–2100；若生日在闰月，请勾选“闰月”。</div>
+    </div>
+
+    <!-- 公历输入 -->
+    <div id="solarInputs" class="field">
+      <label>出生日期 <span class="req">*</span></label>
+      <div class="inline">
+        <select id="sYear" required></select>
+        <select id="sMonth" required></select>
+        <select id="sDay" required></select>
+      </div>
+    </div>
+
+    <!-- 农历输入 -->
+    <div id="lunarInputs" class="field hidden">
+      <label>农历出生日期 <span class="req">*</span></label>
+      <div class="inline">
+        <select id="lYear" required></select>
+        <select id="lMonth" required></select>
+        <select id="lDay" required></select>
+        <label class="checkbox"><input id="lLeap" type="checkbox"> 闰月</label>
+      </div>
+    </div>
+
+    <div class="field inline">
+      <label class="checkbox">
+        <input id="useTime" type="checkbox" />
+        精确到时分（可选）
+      </label>
+      <input id="birthTime" type="time" value="00:00" disabled />
+    </div>
+
+    <button type="submit">计算</button>
+    <p class="tz">以当前设备时区计算：<span id="tz"></span></p>
+    <p class="note">说明：公历 2/29 在平年按 2/28；农历若出生在闰月而当年无同月闰月，则按同月“非闰”生日。</p>
+  </form>
+
+  <section id="result" class="result hidden" aria-live="polite"></section>
+  <section id="milestones" class="milestones hidden"></section>
+</main>
+
+<script>
+/* ===== 通用/UTC工具 ===== */
+const dayMs = 24*60*60*1000;
+function fmt(n){ return n.toLocaleString('zh-CN'); }
+const tzEl = document.getElementById('tz');
+try { tzEl.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone || '本地时区'; } catch { tzEl.textContent = '本地时区'; }
+function show(el){ el.classList.remove('hidden'); } function hide(el){ el.classList.add('hidden'); }
+
+/* ===== UI ===== */
+const form = document.getElementById('ageForm');
+const resultEl = document.getElementById('result');
+const milesEl  = document.getElementById('milestones');
+const useTimeEl   = document.getElementById('useTime');
+const birthTimeEl = document.getElementById('birthTime');
+useTimeEl.addEventListener('change',()=> birthTimeEl.disabled = !useTimeEl.checked);
+
+const solarWrap = document.getElementById('solarInputs');
+const lunarWrap = document.getElementById('lunarInputs');
+const calRadios = [...document.querySelectorAll('input[name="calType"]')];
+function getCalType(){ return calRadios.find(r=>r.checked).value; }
+calRadios.forEach(r => r.addEventListener('change', ()=>{
+  if(getCalType()==='lunar'){ hide(solarWrap); show(lunarWrap); }
+  else{ show(solarWrap); hide(lunarWrap); }
+}));
+
+/* ===== 公历选择 ===== */
+const sYear = document.getElementById('sYear');
+const sMonth= document.getElementById('sMonth');
+const sDay  = document.getElementById('sDay');
+(function initSolar(){
+  const now = new Date(); const thisYear = now.getFullYear();
+  for(let y=2100;y>=1900;y--){ const o=document.createElement('option'); o.value=y; o.textContent=`${y} 年`; sYear.appendChild(o); }
+  for(let m=1;m<=12;m++){ const o=document.createElement('option'); o.value=m; o.textContent=`${m} 月`; sMonth.appendChild(o); }
+  function fillDays(){
+    const y = +sYear.value, m=+sMonth.value;
+    const days = new Date(y, m, 0).getDate();
+    const keep = +sDay.value || 1;
+    sDay.innerHTML=''; for(let d=1; d<=days; d++){ const o=document.createElement('option'); o.value=d; o.textContent=`${d} 日`; sDay.appendChild(o); }
+    sDay.value = String(Math.min(keep, days));
+  }
+  sYear.addEventListener('change', fillDays); sMonth.addEventListener('change', fillDays);
+  sYear.value=thisYear; sMonth.value=now.getMonth()+1; fillDays(); sDay.value=now.getDate();
+})();
+
+/* ===== 农历数据/算法（1900-2100） =====
+位义：
+- 低4位：闰月序号（0=无）
+- 第16位（0x10000）：闰月大小（1=30天，0=29天）
+- 自 0x8000 起到 0x0010：12个月是否大月（1=30天，0=29天），对应 1-12 月
+基准：1900-01-31(公历) = 1900-正月初一(农历)
+*/
+const lunarInfo = [
+  0x04bd8,0x04ae0,0x0a570,0x054d5,0x0d260,0x0d950,0x16554,0x056a0,0x09ad0,0x055d2,
+  0x04ae0,0x0a5b6,0x0a4d0,0x0d250,0x1d255,0x0b540,0x0d6a0,0x0ada2,0x095b0,0x14977,
+  0x04970,0x0a4b0,0x0b4b5,0x06a50,0x06d40,0x1ab54,0x02b60,0x09570,0x052f2,0x04970,
+  0x06566,0x0d4a0,0x0ea50,0x06e95,0x05ad0,0x02b60,0x186e3,0x092e0,0x1c8d7,0x0c950,
+  0x0d4a0,0x1d8a6,0x0b550,0x056a0,0x1a5b4,0x025d0,0x092d0,0x0d2b2,0x0a950,0x0b557,
+  0x06ca0,0x0b550,0x15355,0x04da0,0x0a5d0,0x14573,0x052d0,0x0a9a8,0x0e950,0x06aa0,
+  0x0aea6,0x0ab50,0x04b60,0x0aae4,0x0a570,0x05260,0x0f263,0x0d950,0x05b57,0x056a0,
+  0x096d0,0x04dd5,0x04ad0,0x0a4d0,0x0d4d4,0x0d250,0x0d558,0x0b540,0x0b6a0,0x195a6,
+  0x095b0,0x049b0,0x0a974,0x0a4b0,0x0b27a,0x06a50,0x06d40,0x0af46,0x0ab60,0x09570,
+  0x04af5,0x04970,0x064b0,0x074a3,0x0ea50,0x06b58,0x05ac0,0x0ab60,0x096d5,0x092e0,
+  0x0c960,0x0d954,0x0d4a0,0x0da50,0x07552,0x056a0,0x0abb7,0x025d0,0x092d0,0x0cab5,
+  0x0a950,0x0b4a0,0x0baa4,0x0ad50,0x055d9,0x04ba0,0x0a5b0,0x15176,0x052b0,0x0a930,
+  0x07954,0x06aa0,0x0ad50,0x05b52,0x04b60,0x0a6e6,0x0a4e0,0x0d260,0x0ea65,0x0d530,
+  0x05aa0,0x076a3,0x096d0,0x04bd7,0x04ad0,0x0a4d0,0x1d0b6,0x0d250,0x0d520,0x0dd45,
+  0x0b5a0,0x056d0,0x055b2,0x049b0,0x0a577,0x0a4b0,0x0aa50,0x1b255,0x06d20,0x0ada0,
+  0x14b63,0x09370,0x049f8,0x04970,0x064b0,0x168a6,0x0ea50,0x06aa0,0x1a6c4,0x0aae0,
+  0x0a2e0,0x0d2e3,0x0c960,0x0d557,0x0d4a0,0x0da50,0x05d55,0x056a0,0x0a6d0,0x055d4,
+  0x052d0,0x0a9b8,0x0a950,0x0b4a0,0x0b6a6,0x0ad50,0x055a0,0x0aba4,0x0a5b0,0x052b0,
+  0x0b273,0x06930,0x07337,0x06aa0,0x0ad50,0x14b55,0x04b60,0x0a570,0x054e4,0x0d160,
+  0x0e968,0x0d520,0x0daa0,0x16aa6,0x056d0,0x04ae0,0x0a9d4,0x0a2d0,0x0d150,0x0f252,
+  0x0d520
+];
+function leapMonth(y){ return lunarInfo[y-1900] & 0xf; } // 0=无
+function leapDays(y){ const lm = leapMonth(y); return lm ? ((lunarInfo[y-1900] & 0x10000) ? 30 : 29) : 0; }
+function monthDays(y,m){ return (lunarInfo[y-1900] & (0x8000 >> (m-1))) ? 30 : 29; }
+function lYearDays(y){
+  let sum=348, info=lunarInfo[y-1900] & 0x0FFFF;
+  for(let i=0x8000;i>0x8;i>>=1) sum += (info & i)?1:0;
+  return sum + leapDays(y);
+}
+
+/* —— 经典且稳的：公历→农历 —— */
+function solarToLunar(date){
+  const baseUTC = Date.UTC(1900,0,31);
+  const targetUTC = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  let offset = Math.floor((targetUTC - baseUTC)/dayMs);
+
+  let i, temp, year;
+  for(i=1900; i<2101 && offset>0; i++){
+    temp = lYearDays(i);
+    offset -= temp;
+  }
+  if(offset < 0){ offset += temp; i--; }
+  year = i;
+
+  const leap = leapMonth(year);
+  let isLeap=false;
+
+  let month;
+  for(i=1; i<13 && offset>0; i++){
+    // 先判断是否进入闰月
+    if(leap>0 && i==(leap+1) && !isLeap){
+      --i; isLeap=true; temp = leapDays(year);
+    }else{
+      temp = monthDays(year, i);
+    }
+    // 闰月走完，退出闰月
+    if(isLeap && i==(leap+1)) isLeap=false;
+    offset -= temp;
+  }
+
+  if(offset===0 && leap>0 && i===(leap+1)){
+    // 边界：恰好落在闰月切换点
+    if(isLeap){ isLeap=false; }
+    else { isLeap=true; --i; }
+  }
+  if(offset<0){ offset += temp; --i; }
+
+  month = i;
+  const day = offset + 1;
+  return { lYear:year, lMonth:month, lDay:day, isLeap };
+}
+
+/* —— 经典且稳的：农历→公历 —— */
+function lunarToSolar(y,m,d,isLeap){
+  if(y<1900 || y>2100) throw new Error('农历年份超出范围');
+
+  let offset=0;
+  for(let i=1900;i<y;i++) offset += lYearDays(i);
+
+  const lm = leapMonth(y);
+  if(!isLeap){
+    // 非闰：累加到 m-1
+    for(let i=1;i<m;i++) offset += monthDays(y,i);
+    // 若该年有闰月且 m>闰月：还需要跨过闰月
+    if(lm && m>lm) offset += leapDays(y);
+  }else{
+    // 闰月：必须该年闰 m 月存在
+    if(lm !== m) throw new Error('该年无此闰月');
+    // 先跨过 1..m 的普通月
+    for(let i=1;i<=m;i++) offset += monthDays(y,i);
+    // 再进入同月的闰月
+  }
+  offset += (d - 1);
+
+  const baseUTC = Date.UTC(1900,0,31);
+  const tgtUTC  = baseUTC + offset*dayMs;
+  const tmp = new Date(tgtUTC);
+  return new Date(tmp.getUTCFullYear(), tmp.getUTCMonth(), tmp.getUTCDate(), 0,0,0,0);
+}
+
+/* ===== 农历选择区 ===== */
+const lYear = document.getElementById('lYear');
+const lMonth= document.getElementById('lMonth');
+const lDay  = document.getElementById('lDay');
+const lLeap = document.getElementById('lLeap');
+(function initLunar(){
+  const now = new Date(); const thisYear = now.getFullYear();
+  for(let y=2100;y>=1900;y--){ const o=document.createElement('option'); o.value=y; o.textContent=`${y} 年`; lYear.appendChild(o); }
+  for(let m=1;m<=12;m++){ const o=document.createElement('option'); o.value=m; o.textContent=`${m} 月`; lMonth.appendChild(o); }
+  function fillLDays(){
+    const y=+lYear.value, m=+lMonth.value, leap=lLeap.checked;
+    const lm = leapMonth(y);
+    let days = monthDays(y,m);
+    if(leap && lm===m) days = leapDays(y);
+    lDay.innerHTML=''; for(let d=1; d<=days; d++){ const o=document.createElement('option'); o.value=d; o.textContent=`${d} 日`; lDay.appendChild(o); }
+  }
+  lYear.addEventListener('change', fillLDays);
+  lMonth.addEventListener('change', fillLDays);
+  lLeap.addEventListener('change', fillLDays);
+
+  const ln = solarToLunar(now);
+  lYear.value = ln.lYear; lMonth.value = ln.lMonth; lLeap.checked = ln.isLeap; fillLDays(); lDay.value=ln.lDay;
+})();
+
+/* ===== 下一次生日计算 ===== */
+function isLeapYear(y){ return (y%4===0 && y%100!==0) || (y%400===0); }
+function nextSolarBirthdayFromSolar(y,m,d,h=0,min=0){
+  const now = new Date(); const Y = now.getFullYear(); const feb29=(m===2&&d===29);
+  function build(yy){ const dd=(feb29 && !isLeapYear(yy))?28:d; return new Date(yy,m-1,dd,h,min,0,0); }
+  let b=build(Y); if(b>=now) return b; return build(Y+1);
+}
+function nextSolarBirthdayFromLunar(lY,lM,lD,isLeapBirth,h=0,min=0){
+  const now = new Date(); const Y = now.getFullYear();
+  function pick(yy){
+    const lm = leapMonth(yy);
+    const useLeap = (isLeapBirth && lm===lM);
+    const maxD = useLeap ? leapDays(yy) : monthDays(yy, lM);
+    const dd = Math.min(lD, maxD);
+    const solar = lunarToSolar(yy, lM, dd, useLeap);
+    solar.setHours(h, min, 0, 0);
+    return solar;
+  }
+  let b=pick(Y); if(b<now) b=pick(Y+1); return b;
+}
+
+/* ===== 提交计算 ===== */
+form.addEventListener('submit', (e)=>{
+  e.preventDefault();
+  const now = new Date();
+  let birth, nextBirthday, nextLunarText='';
+
+  let hh=0, mm=0;
+  if(useTimeEl.checked && birthTimeEl.value){ const [H,M]=birthTimeEl.value.split(':').map(Number); hh=Number.isFinite(H)?H:0; mm=Number.isFinite(M)?M:0; }
+
+  try{
+    if(getCalType()==='solar'){
+      const y=+sYear.value, m=+sMonth.value, d=+sDay.value;
+      if(!y||!m||!d) throw new Error('请选择公历出生日期');
+      birth = new Date(y,m-1,d,hh,mm,0,0);
+      if(birth>now) throw new Error('出生时间在未来？');
+      nextBirthday = nextSolarBirthdayFromSolar(y,m,d,hh,mm);
+      const ln = solarToLunar(nextBirthday);
+      nextLunarText = `（农历：${ln.isLeap?'闰':''}${ln.lMonth}月${ln.lDay}日）`;
+    }else{
+      const ly=+lYear.value, lm=+lMonth.value, ld=+lDay.value, isLeap=lLeap.checked;
+      if(!ly||!lm||!ld) throw new Error('请选择农历出生日期');
+      birth = lunarToSolar(ly,lm,ld,isLeap); birth.setHours(hh,mm,0,0);
+      if(birth>now) throw new Error('出生时间在未来？');
+      nextBirthday = nextSolarBirthdayFromLunar(ly,lm,ld,isLeap,hh,mm);
+      const ln = solarToLunar(nextBirthday);
+      nextLunarText = `（农历：${ln.isLeap?'闰':''}${ln.lMonth}月${ln.lDay}日）`;
+    }
+  }catch(err){
+    show(resultEl); hide(milesEl);
+    resultEl.innerHTML = `<strong class="warn">${err.message || '日期解析失败，请检查输入'}</strong>`;
+    return;
+  }
+
+  const ms = now - birth;
+  const totalDays    = Math.floor(ms / dayMs);
+  const totalHours   = Math.floor(ms / (60*60*1000));
+  const totalMinutes = Math.floor(ms / (60*1000));
+  const totalSeconds = Math.floor(ms / 1000);
+  const yearsApprox   = (ms / (365.2425 * dayMs));
+  const yearsInt      = Math.floor(yearsApprox);
+  const daysRemainder = Math.floor((yearsApprox - yearsInt) * 365.2425);
+
+  const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const nextMid  = new Date(nextBirthday.getFullYear(), nextBirthday.getMonth(), nextBirthday.getDate());
+  const daysToNext = Math.floor((nextMid - todayMid)/dayMs);
+
+  const milestones = [1000,5000,10000,15000,20000];
+  const nexts = milestones.filter(n=>n>totalDays).slice(0,3).map(n=>({ n, when:new Date(birth.getTime()+n*dayMs) }));
+
+  show(resultEl);
+  const nextText = nextBirthday.toLocaleString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long',hour:useTimeEl.checked?'2-digit':undefined,minute:useTimeEl.checked?'2-digit':undefined});
+  resultEl.innerHTML = `
+    <strong>你已经活了 <span class="highlight">${fmt(totalDays)}</span> 天</strong>
+    <div class="kpi">
+      <div class="item"><div class="val">${fmt(totalHours)}</div><div class="label">总小时（约）</div></div>
+      <div class="item"><div class="val">${fmt(totalMinutes)}</div><div class="label">总分钟（约）</div></div>
+      <div class="item"><div class="val">${fmt(totalSeconds)}</div><div class="label">总秒（约）</div></div>
+      <div class="item"><div class="val">${yearsInt} 年 ${daysRemainder} 天</div><div class="label">按回归年近似</div></div>
+    </div>
+    <div class="kpi" style="margin-top:14px">
+      <div class="item"><div class="val">${daysToNext}</div><div class="label">距离下一次生日（天）</div></div>
+      <div class="item"><div class="val">${nextText}<br><span class="help">${nextLunarText}</span></div><div class="label">下一次生日日期</div></div>
+    </div>
+  `;
+
+  show(milesEl);
+  milesEl.innerHTML = `
+    <h3>下一次里程碑</h3>
+    ${nexts.length?`<ul>${nexts.map(x=>`<li>第 <strong>${fmt(x.n)}</strong> 天：${x.when.toLocaleString('zh-CN')}</li>`).join('')}</ul>`:`<p class="tz">已经超过 20,000 天啦 🎉</p>`}
+  `;
+});
+</script>
+</body>
+</html>
